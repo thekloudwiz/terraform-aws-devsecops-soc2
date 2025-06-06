@@ -1,0 +1,67 @@
+
+# Project Name
+variable "project_name" {
+  description = "Project name"
+  type        = string
+}
+
+# Owner
+variable "owner" {
+  description = "Owner of the project"
+  type        = string
+}
+
+# WAF Scope
+variable "waf_scope" {
+  description = "Whether the WAF is for REGIONAL (ALB) or CLOUDFRONT"
+  type        = string
+  default     = "REGIONAL"
+}
+
+# WAF Default Action
+variable "waf_default_action" {
+  description = "Default action for WAF (allow or block)"
+  type        = string
+  default     = "ALLOW"
+}
+
+# Workspace Config
+variable "workspace_config" {
+  description = "Configuration values for each workspace"
+  type = map(object({
+    waf_rule_thresholds = optional(object({
+      request_limit = optional(number, 2000)
+      ip_rate_limit = optional(number, 2000)
+    }))
+  }))
+}
+
+# Container Port
+variable "container_port" {
+  description = "Port that the container listens on"
+  type        = number
+}
+
+# # Primary Domain Name
+# variable "primary_domain_name" {
+#   description = "The primary domain name"
+#   type        = string
+# }
+
+# #Portfolio Domain Name
+# variable "portfolio_domain_name" {
+#   description = "The portfolio domain name"
+#   type        = string
+# }
+
+# #IAM Certificate Name
+# variable "iam_cert_name" {
+#   description = "The IAM certificate name"
+#   type        = string
+# }
+
+# #Wildcard Domain Name
+# variable "wildcard_domain_name" {
+#   description = "The wildcard domain name"
+#   type        = string
+# }

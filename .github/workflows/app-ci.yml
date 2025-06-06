@@ -1,0 +1,195 @@
+name: Application CI Pipeline
+
+on:
+  pull_request:
+    branches: [ dev, staging, main ]
+    paths:
+      - 'app/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'public/**'
+      - '.github/workflows/app-ci.yml'
+      - 'package*.json'
+      - 'sonar-project.properties'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '!.github/dependabot.yml'
+      - '!infra/**'
+      - '!docs/**'
+      - '!scripts/**'
+      - '!.githooks/**'
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  security-checks:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.base_ref }}
+    defaults:
+      run:
+        working-directory: .
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Tests with Coverage
+        run: npm run test:coverage
+        
+      - name: Run SAST with SonarCloud
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.sources=src
+            -Dsonar.tests=tests
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.exclusions=node_modules/**,coverage/**,public/**
+            -Dsonar.coverage.exclusions=public/**
+            -Dsonar.verbose=true
+        
+      - name: Run Snyk Security Scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --file=package.json --all-projects --severity-threshold=high
+
+      - name: Run Integration Tests
+        run: npm run test:integration
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.IAM_ROLE }}
+          aws-region: eu-west-1
+
+      - name: Generate Snyk Report
+        run: |
+          mkdir -p reports
+          snyk test --json --all-projects --severity-threshold=high > reports/snyk-report.json || true
+
+      - name: Upload Security Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            ${{ github.workspace }}/reports/snyk-report.json
+
+      - name: Upload Reports to S3
+        run: |
+          REPORT_DIR="reports/${{ github.repository }}/${{ github.ref_name }}/${{ github.sha }}"
+          aws s3 cp ${{ github.workspace }}/reports/snyk-report.json "s3://${{ secrets.REPORTS_BUCKET }}/$REPORT_DIR/"
+
+  build-and-test-image:
+    needs: security-checks
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.base_ref }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.IAM_ROLE }}
+          aws-region: eu-west-1
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate Image Tags
+        id: tags
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          GIT_SHA=$(git rev-parse --short HEAD)
+          tag="pr-${PR_NUMBER}-${GIT_SHA}"
+          
+          # Set outputs
+          echo "image_tag=$tag" >> $GITHUB_OUTPUT
+          echo "tags=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPO }}:$tag" >> $GITHUB_OUTPUT
+          
+          # Store in SSM
+          aws ssm put-parameter \
+            --name "/${{ github.repository }}/latest-image-tag" \
+            --type "String" \
+            --value "$tag" \
+            --overwrite
+
+      - name: Upload Image Tag
+        run: echo "${{ steps.tags.outputs.tags }}" > image-tag.txt
+        
+      - name: Upload Image Tag Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-tag
+          path: image-tag.txt
+
+      - name: Build Image 
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: ${{ steps.tags.outputs.tags }}
+          no-cache: true
+
+      - name: Scan Image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.tags.outputs.tags }}
+          format: 'json'
+          output: 'trivy-results.json'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.json
+
+      - name: Upload Trivy Results to S3
+        run: |
+          REPORT_DIR="reports/${{ github.repository }}/${{ github.base_ref }}/${{ github.sha }}"
+          aws s3 cp trivy-results.json "s3://${{ secrets.REPORTS_BUCKET }}/$REPORT_DIR/"
+
+      - name: Push Image to ECR
+        run: docker push ${{ steps.tags.outputs.tags }}
+
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,commit,ref,workflow,took
+          text: |
+            CI Pipeline for PR #${{ github.event.pull_request.number }} ${{ job.status }}!
+            Image: ${{ steps.tags.outputs.tags }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

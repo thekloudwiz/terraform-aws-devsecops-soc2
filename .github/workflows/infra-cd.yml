@@ -1,0 +1,128 @@
+name: Terraform Deployment Pipeline
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [ dev, staging, main ]
+    paths:
+      - 'infra/**/*.tf'
+      - 'infra/**/*.tfvars.*'
+      - 'infra/modules/**'
+      - 'infra/policies/**'
+      - '.github/workflows/infra-cd.yml'
+      - '!app/**'
+      - '!src/**'
+      - '!tests/**'
+      - '!public/**'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  terraform-plan:
+    name: 'Terraform Plan'
+    # Only run if it's a manual trigger or if the PR was merged (not just closed)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./infra
+    
+    env:
+      ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.base_ref }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.IAM_ROLE }}
+        aws-region: eu-west-1
+        role-session-name: GitHubActions
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Select Workspace
+      run: terraform workspace select -or-create ${{ env.ENVIRONMENT }}
+
+    - name: Terraform Plan
+      run: |
+        terraform plan \
+          -var-file="environments/terraform.tfvars.${{ env.ENVIRONMENT }}" \
+          -out=tfplan
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v4
+      with:
+        name: tfplan
+        path: infra/tfplan
+
+  terraform-apply:
+    name: 'Terraform Apply'
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.base_ref }}
+    defaults:
+      run:
+        working-directory: ./infra
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.IAM_ROLE }}
+        aws-region: eu-west-1
+        role-session-name: GitHubActions
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Select Workspace
+      run: terraform workspace select -or-create ${{ env.ENVIRONMENT }}
+
+    - name: Download Terraform Plan
+      uses: actions/download-artifact@v4
+      with:
+        name: tfplan
+        path: infra
+
+    - name: Terraform Apply
+      run: terraform apply -auto-approve tfplan
+
+    - name: Notify Slack
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        fields: repo,commit,ref,workflow,took
+        text: "Deployment for ${{ env.ENVIRONMENT }} ${{ job.status }}!"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
