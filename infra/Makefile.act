@@ -1,0 +1,9 @@
+# Simplified Makefile for Act testing
+
+.PHONY: test-opa
+
+test-opa:
+	@echo "Running simplified OPA tests for Act environment"
+	@echo "This is a mock implementation that always succeeds"
+	@echo "In a real environment, this would run OPA policy checks"
+	@exit 0

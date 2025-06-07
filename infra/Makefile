@@ -5,9 +5,9 @@ test-all: test-opa clean
 test-opa:
 	@echo "Running OPA policy checks..."
 	@echo "Current workspace is: $$(terraform workspace show)"
-	@if [ -f "environments/terraform.tfvars.$$(terraform workspace show)" ]; then \
-		echo "Using tfvars file: environments/terraform.tfvars.$$(terraform workspace show)"; \
-		terraform plan -var-file="environments/terraform.tfvars.$$(terraform workspace show)" -lock=false -out=tfplan.binary || exit 1; \
+	@if [ -f "environments/$$(terraform workspace show).tfvars" ]; then \
+		echo "Using tfvars file: environments/$$(terraform workspace show).tfvars"; \
+		terraform plan -var-file="environments/$$(terraform workspace show).tfvars" -lock=false -out=tfplan.binary || exit 1; \
 	else \
 		echo "Error: tfvars file not found for workspace $$(terraform workspace show)"; \
 		exit 1; \

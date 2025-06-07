@@ -1,0 +1,8 @@
+primary_region = "eu-west-1"
+pr_suffix = "euw1"
+sec_region = "eu-central-1"
+sr_suffix = "euc1"
+owner = "thekloudwiz"
+project_name = "tf-aws-soc2"
+bucket_name = "tf-state"
+replica_bucket = "tf-state-replica"

@@ -37,7 +37,7 @@ terraform.tfstate.*
 *.tfplan
 tfplan
 tfplan.*
-*.tfvars
+# *.tfvars
 !example.tfvars
 override.tf
 override.tf.json
@@ -49,10 +49,19 @@ crash.*.log
 terraform.rc
 
 # Act configuration
+.github/act-*.yml
 .github/act-secrets.env
 .actrc
 event.json
 .github/act-pr-merged.json
+act-commands.md
+act-readme.md
+act-setup.md
+run-act.md
+run-act.sh
+run-act.ps1
+get-secrets.sh
+get-secrets.ps1
 
 # IDE and OS files
 .vscode/

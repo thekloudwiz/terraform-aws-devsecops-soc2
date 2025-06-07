@@ -1,0 +1,128 @@
+name: Act - Application CD Pipeline
+
+on:
+  push:
+    branches: [ dev, staging, main ]
+    paths:
+      - 'app/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'public/**'
+      - 'package*.json'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '!.github/dependabot.yml'
+      - '!.github/workflows/**'
+      - '!infra/**'
+      - '!docs/**'
+      - '!scripts/**'
+      - '!.githooks/**'
+      
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    environment:
+      name: ${{ github.ref_name || 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        run: |
+          echo "Using AWS credentials from environment variables"
+          echo "AWS_REGION=$AWS_REGION" >> $GITHUB_ENV
+          echo "AWS credentials configured"
+
+      - name: Mock ECR Login
+        id: login-ecr
+        run: |
+          echo "Mocking ECR login for Act environment"
+          echo "registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+      
+      - name: Retrieve Image Tag from SSM
+        id: retrieve-image-tag
+        run: |
+          # Mock retrieving image tag
+          IMAGE_TAG="latest-$(git rev-parse --short HEAD)"
+          echo "Retrieved mock image tag: $IMAGE_TAG"
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Verify Image Exists
+        run: |
+          # Mock verifying image exists
+          IMAGE_TAG="${{ steps.retrieve-image-tag.outputs.tag }}"
+          echo "Checking for image: $IMAGE_TAG in $ECR_REPO"
+          echo "✅ Image verified in ECR"
+
+      - name: Generate Image Tag
+        id: tags
+        run: |
+          ImageTag="${{ steps.retrieve-image-tag.outputs.tag }}"
+          echo "tags=${{steps.login-ecr.outputs.registry}}/$ECR_REPO:${ImageTag}" >> $GITHUB_OUTPUT
+
+      - name: Download Task Definition
+        id: download-taskdef
+        run: |
+          # Mock downloading task definition
+          TASK_FAMILY="$ECS_FAMILY"
+          echo '{"family":"'$TASK_FAMILY'","containerDefinitions":[{"name":"app","image":"'$ECR_REGISTRY/$ECR_REPO:latest'"}]}' > taskdef.json
+          echo "task_family=$TASK_FAMILY" >> $GITHUB_OUTPUT
+          echo "current_taskdef_arn=arn:aws:ecs:$AWS_REGION:123456789012:task-definition/$TASK_FAMILY:1" >> $GITHUB_OUTPUT
+
+      - name: Render New Task Definition
+        id: render-taskdef
+        run: |
+          # Read the task definition
+          TASKDEF_CONTENT=$(cat taskdef.json)
+          
+          # Update the image in container definitions using the full image URL
+          NEW_TASKDEF=$(echo "$TASKDEF_CONTENT" | jq --arg IMAGE "${{steps.tags.outputs.tags}}" \
+            '.containerDefinitions[0].image = $IMAGE')
+          
+          # Remove fields that shouldn't be included in register-task-definition
+          NEW_TASKDEF=$(echo "$NEW_TASKDEF" | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+          
+          # Save the new task definition
+          echo "$NEW_TASKDEF" > new-taskdef.json
+          
+          echo "New task definition created with image: ${{steps.tags.outputs.tags}}"
+
+      - name: Register New Task Definition
+        id: register-taskdef
+        run: |
+          # Mock registering task definition
+          echo "task_def_arn=arn:aws:ecs:$AWS_REGION:123456789012:task-definition/$ECS_FAMILY:2" >> $GITHUB_OUTPUT
+          echo "Task definition registered"
+
+      - name: Update ECS Service
+        id: deploy
+        run: |
+          # Mock updating ECS service
+          echo "Updating ECS service with new task definition..."
+          echo "Service: $ECS_SERVICE in cluster: $ECS_CLUSTER"
+          echo "✅ Service updated successfully"
+
+      - name: Verify Deployment
+        run: |
+          # Mock verifying deployment
+          echo "Verifying deployment status..."
+          echo "✅ Deployment successful!"
+
+      - name: Rollback on Failure
+        if: failure() && steps.deploy.outcome == 'failure'
+        run: |
+          echo "Deployment failed, would roll back to previous task definition..."
+          echo "✅ Rollback would be successful"
+
+      - name: Notify Slack
+        run: |
+          echo "Skipping Slack notification in Act environment"
+          echo "Would send notification for deployment to ${{ github.ref_name || 'dev' }}"
+          echo "Image: ${{ steps.tags.outputs.tags }}"
